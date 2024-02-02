@@ -88,7 +88,7 @@ fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Textur
         mip_level_count: 1, // the number of mip levels the texture will contain
         sample_count: 1,    // sample_count > 1 would indicate a multisampled texture
         // Use RGBA format for the output
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         // RENDER_ATTACHMENT -> so that the GPU can render to the texture
         // COPY_SRC -> so that we can pull data out of the texture
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
