@@ -3,10 +3,9 @@ name = "example_01_triangle"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-wgpu = "0.19.1" # Rust library for WebGPU
+wgpu = "0.19.1"    # Rust library for WebGPU
 pollster = "0.3.0" # Simplest dep for async main
+oneshot = "0.1.6"  # One-shot send/receive channel
+# Save generated image
 image = { version = "0.24.8", default-features = false, features = ["png"] }
-oneshot = "0.1.6"
