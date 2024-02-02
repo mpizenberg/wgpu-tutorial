@@ -1,3 +1,5 @@
+use wgpu::util::DeviceExt; // Utility trait to create and initialize buffers with device.create_buffer_init()
+
 fn main() {
     // Make the main async
     pollster::block_on(run());
@@ -12,19 +14,47 @@ async fn run() {
     let texture = init_output_texture(&device, 256);
     let texture_view = texture.create_view(&Default::default());
 
+    // Create and initialize the vertex buffer for the triangle vertices
+    // (needs the DeviceExt trait)
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Vertex Buffer"),
+        contents: bytemuck::cast_slice(VERTICES),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+
+    // Create and initialize the index buffer for the indices of the triangle face
+    // (needs the DeviceExt trait)
+    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Index Buffer"),
+        contents: bytemuck::cast_slice(INDICES),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+
     // Define our pipeline
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("triangle_shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("triangle.wgsl").into()),
     });
-    let pipeline = build_simple_pipeline(&device, &shader_module, texture.format());
+    let pipeline = build_simple_pipeline(
+        &device,
+        &shader_module,
+        texture.format(),
+        Vertex::buffer_layout(),
+    );
 
     // Initialize a command encoder
     let mut encoder = device.create_command_encoder(&Default::default());
 
     // Draw our pipeline (add render pass to the command encoder)
     // This needs to be inside {...} or a function so that the &pipeline lifetime works.
-    draw_pipeline(&mut encoder, &pipeline, &texture_view);
+    draw_pipeline(
+        &mut encoder,
+        &pipeline,
+        &texture_view,
+        &vertex_buffer,
+        &index_buffer,
+        INDICES.len() as u32,
+    );
 
     // Initialize a buffer for the texture output
     let output_buffer_desc = create_texture_buffer_descriptor(&texture);
@@ -98,11 +128,63 @@ fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Textur
     device.create_texture(&texture_desc)
 }
 
+/// Each corner of the triangle is a Vertex with the following properties
+/// Bytemuck is used to enable easy casting to a &[u8].
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Vertex {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+}
+
+// Indices and vertices of the triangle
+const INDICES: &[u16] = &[0, 1, 2];
+const VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [0.0, 0.5, 0.0],
+        color: [1.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [-0.5, -0.5, 0.0],
+        color: [0.0, 1.0, 0.0],
+    },
+    Vertex {
+        position: [0.5, -0.5, 0.0],
+        color: [0.0, 0.0, 1.0],
+    },
+];
+
+impl Vertex {
+    /// Define the layout of Vertex buffers
+    pub fn buffer_layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            // array_stride is the bytes count between two vertices
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                // position
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                // color
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
+        }
+    }
+}
+
 /// Define our simple render pipeline
 fn build_simple_pipeline(
     device: &wgpu::Device,
     shader_module: &wgpu::ShaderModule,
     texture_format: wgpu::TextureFormat,
+    vertex_buffer_layout: wgpu::VertexBufferLayout,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
@@ -110,7 +192,7 @@ fn build_simple_pipeline(
         vertex: wgpu::VertexState {
             module: shader_module,
             entry_point: "vertex_main",
-            buffers: &[],
+            buffers: &[vertex_buffer_layout],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader_module,
@@ -153,6 +235,9 @@ fn draw_pipeline(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
     texture_view: &wgpu::TextureView,
+    vertex_buffer: &wgpu::Buffer,
+    index_buffer: &wgpu::Buffer,
+    num_indices: u32,
 ) {
     // Setup the pass that will render into our texture
     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -178,7 +263,9 @@ fn draw_pipeline(
 
     // Draw the render pass for our pipeline
     render_pass.set_pipeline(&pipeline);
-    render_pass.draw(0..3, 0..1);
+    render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+    render_pass.draw_indexed(0..num_indices, 0, 0..1);
 }
 
 /// Create a buffer descriptor of the correct size for the texture
