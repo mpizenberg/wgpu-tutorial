@@ -4,8 +4,6 @@ fn main() {
 }
 
 async fn run() {
-    println!("Hello, world!");
-
     // Initializing WebGPU
     println!("Initializing WebGPU ...");
     let (device, queue) = init_wgpu_device().await.unwrap();
@@ -42,7 +40,7 @@ async fn run() {
     // Transfer the texture output buffer into an image buffer
     println!("Saving the GPU output into an image ...");
     let img = to_image(&device, &output_buffer, texture.width(), texture.height()).await;
-    
+
     println!("Saving the image to disk ...");
     img.save("image.png").unwrap();
 
