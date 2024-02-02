@@ -238,6 +238,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
+name = "example_01_triangle"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "oneshot",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1207,16 +1217,6 @@ dependencies = [
  "web-sys",
  "wgpu-types",
  "winapi",
-]
-
-[[package]]
-name = "wgpu-tutorial"
-version = "0.1.0"
-dependencies = [
- "image",
- "oneshot",
- "pollster",
- "wgpu",
 ]
 
 [[package]]
