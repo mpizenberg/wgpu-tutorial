@@ -1,5 +1,5 @@
 [package]
-name = "example_02_buffer"
+name = "example_03_obj"
 version = "0.1.0"
 edition = "2021"
 

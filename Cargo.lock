@@ -273,6 +273,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "example_03_obj"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "image",
+ "oneshot",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

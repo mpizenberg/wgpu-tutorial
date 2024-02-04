@@ -33,7 +33,7 @@ async fn run() {
     // Define our pipeline
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("triangle_shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("triangle.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(include_str!("obj.wgsl").into()),
     });
     let pipeline = build_simple_pipeline(
         &device,
