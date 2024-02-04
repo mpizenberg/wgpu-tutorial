@@ -14,19 +14,23 @@ async fn run() {
     let texture = init_output_texture(&device, 256);
     let texture_view = texture.create_view(&Default::default());
 
-    // Create and initialize the vertex buffer for the triangle vertices
+    // Load the OBJ bunny
+    let (models, _) = tobj::load_obj("bunny.obj", &tobj::GPU_LOAD_OPTIONS).unwrap();
+    let bunny = &models[0].mesh;
+
+    // Create and initialize the vertex buffer for the vertices in the bunny mesh
     // (needs the DeviceExt trait)
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Vertex Buffer"),
-        contents: bytemuck::cast_slice(VERTICES),
+        contents: bytemuck::cast_slice(&bunny.positions),
         usage: wgpu::BufferUsages::VERTEX,
     });
 
-    // Create and initialize the index buffer for the indices of the triangle face
+    // Create and initialize the index buffer for the indices of the vertices in the bunny mesh
     // (needs the DeviceExt trait)
     let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Index Buffer"),
-        contents: bytemuck::cast_slice(INDICES),
+        contents: bytemuck::cast_slice(&bunny.indices),
         usage: wgpu::BufferUsages::INDEX,
     });
 
@@ -39,7 +43,7 @@ async fn run() {
         &device,
         &shader_module,
         texture.format(),
-        Vertex::buffer_layout(),
+        vtx_buffer_layout(),
     );
 
     // Initialize a command encoder
@@ -53,7 +57,7 @@ async fn run() {
         &texture_view,
         &vertex_buffer,
         &index_buffer,
-        INDICES.len() as u32,
+        bunny.indices.len() as u32,
     );
 
     // Initialize a buffer for the texture output
@@ -128,54 +132,20 @@ fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Textur
     device.create_texture(&texture_desc)
 }
 
-/// Each corner of the triangle is a Vertex with the following properties
-/// Bytemuck is used to enable easy casting to a &[u8].
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pub position: [f32; 3],
-    pub color: [f32; 3],
-}
-
-// Indices and vertices of the triangle
-const INDICES: &[u16] = &[0, 1, 2];
-const VERTICES: &[Vertex] = &[
-    Vertex {
-        position: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 0.0],
-    },
-    Vertex {
-        position: [-0.5, -0.5, 0.0],
-        color: [0.0, 1.0, 0.0],
-    },
-    Vertex {
-        position: [0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0],
-    },
-];
-
-impl Vertex {
-    /// Define the layout of Vertex buffers
-    pub fn buffer_layout() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            // array_stride is the bytes count between two vertices
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                // position
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                // color
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-            ],
-        }
+/// Define the layout of Vertex buffers
+pub fn vtx_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        // array_stride is the bytes count between two vertices
+        array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            // position
+            wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+        ],
     }
 }
 
@@ -210,7 +180,7 @@ fn build_simple_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: Some(wgpu::Face::Front),
             // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
             polygon_mode: wgpu::PolygonMode::Fill,
             // Requires Features::DEPTH_CLIP_CONTROL
@@ -264,7 +234,7 @@ fn draw_pipeline(
     // Draw the render pass for our pipeline
     render_pass.set_pipeline(&pipeline);
     render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
     render_pass.draw_indexed(0..num_indices, 0, 0..1);
 }
 
