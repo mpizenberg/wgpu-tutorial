@@ -11,8 +11,13 @@ async fn run() {
     let (device, queue) = init_wgpu_device().await.unwrap();
 
     // Initialize the output texture
-    let texture = init_output_texture(&device, 256);
+    let texture_size = 256;
+    let texture = init_output_texture(&device, texture_size);
     let texture_view = texture.create_view(&Default::default());
+
+    // Initialize the depth texture
+    let depth_texture = init_depth_texture(&device, texture_size);
+    let depth_texture_view = depth_texture.create_view(&Default::default());
 
     // Load the OBJ bunny
     let (models, _) = tobj::load_obj("bunny.obj", &tobj::GPU_LOAD_OPTIONS).unwrap();
@@ -36,7 +41,7 @@ async fn run() {
 
     // Define our pipeline
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("triangle_shader"),
+        label: Some("obj_shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("obj.wgsl").into()),
     });
     let pipeline = build_simple_pipeline(
@@ -55,31 +60,59 @@ async fn run() {
         &mut encoder,
         &pipeline,
         &texture_view,
+        &depth_texture_view,
         &vertex_buffer,
         &index_buffer,
         bunny.indices.len() as u32,
     );
 
-    // Initialize a buffer for the texture output
+    // Initialize a buffer for the texture output and copy the texture data into it
     let output_buffer_desc = create_texture_buffer_descriptor(&texture);
     let output_buffer = device.create_buffer(&output_buffer_desc);
-
-    // Copy the texture output into a buffer
     copy_texture_to_buffer(&mut encoder, &texture, &output_buffer);
+
+    // Also copy the depth texture into a buffer
+    let depth_buffer_desc = create_texture_buffer_descriptor(&depth_texture);
+    let depth_buffer = device.create_buffer(&depth_buffer_desc);
+    copy_texture_to_buffer(&mut encoder, &depth_texture, &depth_buffer);
 
     // Finalize the command encoder and send it to the queue
     println!("Submitting commands to the queue ...");
     queue.submit(Some(encoder.finish()));
 
-    // Transfer the texture output buffer into an image buffer
-    println!("Saving the GPU output into an image ...");
-    let img = to_image(&device, &output_buffer, texture.width(), texture.height()).await;
+    // Image width and height for convenience
+    let width = texture.width();
+    let height = texture.height();
 
-    println!("Saving the image to disk ...");
-    img.save("image.png").unwrap();
+    // New scope to encapsulate img_data BufferView and drop it before unmapping.
+    {
+        // Transfer the texture output buffer into an image buffer
+        println!("Saving the GPU output into an image ...");
+        let img_data = retrieve_texture_buffer_data(&device, &output_buffer).await;
+        let img = image::RgbaImage::from_raw(width, height, Vec::from(&img_data as &[u8])).unwrap();
+
+        println!("Saving the image to disk ...");
+        img.save("image.png").unwrap();
+
+        // Do the same for the depth buffer
+        println!("Saving the GPU depth output into an image ...");
+        let depth_data = retrieve_texture_buffer_data(&device, &depth_buffer).await;
+        let depth_data_f32: &[f32] = bytemuck::cast_slice(&depth_data);
+
+        println!("Saving the f32 data as a u16 image to disk ...");
+        let img_data_u16: Vec<u16> = depth_data_f32
+            .iter()
+            .map(|p| (p.max(0.0).min(1.0) * 65535.0) as u16)
+            .collect();
+        let img_u16 =
+            image::ImageBuffer::<image::Luma<u16>, _>::from_raw(width, height, img_data_u16)
+                .unwrap();
+        img_u16.save("depth.png").unwrap();
+    }
 
     // Flushes any pending write operations and unmaps the buffer from host memory
     output_buffer.unmap();
+    depth_buffer.unmap();
 
     println!("Terminating the program ...")
 }
@@ -123,6 +156,30 @@ fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Textur
         sample_count: 1,    // sample_count > 1 would indicate a multisampled texture
         // Use RGBA format for the output
         format: wgpu::TextureFormat::Rgba8Unorm,
+        // RENDER_ATTACHMENT -> so that the GPU can render to the texture
+        // COPY_SRC -> so that we can pull data out of the texture
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        // Specify the allowed formats when calling "texture.create_view()"
+        view_formats: &[],
+    };
+    device.create_texture(&texture_desc)
+}
+
+/// Initialize a depth texture
+fn init_depth_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Texture {
+    let texture_desc = wgpu::TextureDescriptor {
+        label: Some("depth_texture"),
+        // The texture size. (layers is set to 1)
+        size: wgpu::Extent3d {
+            width: texture_size,
+            height: texture_size,
+            depth_or_array_layers: 1,
+        },
+        dimension: wgpu::TextureDimension::D2,
+        mip_level_count: 1, // the number of mip levels the texture will contain
+        sample_count: 1,    // sample_count > 1 would indicate a multisampled texture
+        // Use RGBA format for the output
+        format: wgpu::TextureFormat::Depth32Float,
         // RENDER_ATTACHMENT -> so that the GPU can render to the texture
         // COPY_SRC -> so that we can pull data out of the texture
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
@@ -188,7 +245,16 @@ fn build_simple_pipeline(
             // Requires Features::CONSERVATIVE_RASTERIZATION
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            // Enable WebGPU to write the depth (position.z) to the provided texture
+            depth_write_enabled: true,
+            // Keep the depth value closest to us (lower values)
+            depth_compare: wgpu::CompareFunction::Less,
+            // Not using stencil stuff
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState {
             count: 1,
             mask: !0,
@@ -205,6 +271,7 @@ fn draw_pipeline(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
     texture_view: &wgpu::TextureView,
+    depth_texture_view: &wgpu::TextureView,
     vertex_buffer: &wgpu::Buffer,
     index_buffer: &wgpu::Buffer,
     num_indices: u32,
@@ -228,6 +295,14 @@ fn draw_pipeline(
                 store: wgpu::StoreOp::Store,
             },
         })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: depth_texture_view,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(1.0),
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
         ..Default::default()
     });
 
@@ -280,13 +355,11 @@ fn copy_texture_to_buffer(
     );
 }
 
-/// Copy the texture output buffer into an image buffer
-async fn to_image(
+/// Retrieve the texture buffer data from the GPU
+async fn retrieve_texture_buffer_data<'a>(
     device: &wgpu::Device,
-    texture_buffer: &wgpu::Buffer,
-    width: u32,
-    height: u32,
-) -> image::RgbaImage {
+    texture_buffer: &'a wgpu::Buffer,
+) -> wgpu::BufferView<'a> {
     let buffer_slice = texture_buffer.slice(..);
 
     // NOTE: We have to create the mapping THEN device.poll() before await the future.
@@ -300,7 +373,5 @@ async fn to_image(
 
     // Synchronously and immediately map a buffer for reading.
     // Will panic if buffer_slice.map_async() did not finish yet.
-    let data = buffer_slice.get_mapped_range();
-
-    image::RgbaImage::from_raw(width, height, Vec::from(&data as &[u8])).unwrap()
+    buffer_slice.get_mapped_range()
 }
