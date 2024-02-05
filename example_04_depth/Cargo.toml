@@ -1,0 +1,15 @@
+[package]
+name = "example_04_depth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wgpu = "0.19.1"    # Rust library for WebGPU
+pollster = "0.3.0" # Simplest dep for async main
+oneshot = "0.1.6"  # One-shot send/receive channel
+# Save generated image
+image = { version = "0.24.8", default-features = false, features = ["png"] }
+# Cast Rust structs to u8 buffers
+bytemuck = { version = "1.14.1", features = ["derive"] }
+# OBJ loading
+tobj = { version = "4.0.1", default-features = false }

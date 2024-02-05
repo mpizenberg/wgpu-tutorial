@@ -1,3 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["example_01_triangle", "example_02_buffer", "example_03_obj"]
+members = [
+    "example_01_triangle",
+    "example_02_buffer",
+    "example_03_obj",
+    "example_04_depth",
+]
