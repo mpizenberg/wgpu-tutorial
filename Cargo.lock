@@ -297,6 +297,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "example_05_camera"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "image",
+ "oneshot",
+ "pollster",
+ "tobj",
+ "wgpu",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
