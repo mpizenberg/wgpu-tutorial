@@ -1,3 +1,37 @@
+//! This example aims at showing how to use and retrieve the depth (Z) in a minimal wgpu setup.
+//! 
+//! We reuse the bunny OBJ from the previous example,
+//! except this time we try to output a depth map instead of just a mask of the bunny.
+//! This example also shows the effect of the clipping space (0.0-1.0 for Z).
+//! Indeed, a small part of the bunny ear is cut, due to negative Z coordinates.
+//! The steps of this minimal program are the following.
+//!
+//! 1. (async) Initialize the connection with the GPU device
+//! 2. Initialize a wgpu Texture object that will serve as a write target for fragment shader
+//! 3. Initialize a wgpu Buffer where the Texture output will be transferred to
+//! 4. **(new)** Initialize a wgpu Texture object that will serve as a write target for the depth
+//! 5. **(new)** Initialize a wgpu Buffer where the depth texture will be transferred to
+//! 6. Load the OBJ bunny
+//!    1. Create and initialize a vertex buffer containing the triangle coordinates
+//!    2. Create and initialize an index buffer containing the vertex indices in the face
+//! 7. Load the shader module, containing both the vertex and fragment shaders
+//! 8. Define our render pipeline, including:
+//!    - the vertex shader: include our vertex buffer layout
+//!    - the fragment shader
+//!    - the primitive type (triangle list)
+//!    - **(new)** the depth_stencil is configured to compare depths on fragments
+//!      and only keep it when it's closer ("Less").
+//!      Also specifies to store that final depth into our depth texture
+//! 9. Define our command encoder:
+//!    1. Start by defining our render pass:
+//!       - Link to the texture output
+//!       - Link to the pipeline
+//!       - Provide vertex buffer and index buffer
+//!       - Draw the primitive
+//!    2. Add a command to copy the fragment and **(new)** depth textures into their respective buffers
+//! 10. Submit our commands to the device queue
+//! 11. (async) Transfer the output buffer into an image we can save to disk
+
 use wgpu::util::DeviceExt; // Utility trait to create and initialize buffers with device.create_buffer_init()
 
 fn main() {
@@ -6,24 +40,32 @@ fn main() {
 }
 
 async fn run() {
-    // Initializing WebGPU
+    // (1) Initializing WebGPU
     println!("Initializing WebGPU ...");
     let (device, queue) = init_wgpu_device().await.unwrap();
 
-    // Initialize the output texture
+    // (2) Initialize the output texture
     let texture_size = 256;
     let texture = init_output_texture(&device, texture_size);
     let texture_view = texture.create_view(&Default::default());
 
-    // Initialize the depth texture
+    // (3) Initialize a buffer for the texture output
+    let output_buffer_desc = create_texture_buffer_descriptor(&texture);
+    let output_buffer = device.create_buffer(&output_buffer_desc);
+
+    // (4) Initialize the depth texture
     let depth_texture = init_depth_texture(&device, texture_size);
     let depth_texture_view = depth_texture.create_view(&Default::default());
 
-    // Load the OBJ bunny
+    // (5) Initialize a buffer for the depth texture output
+    let depth_buffer_desc = create_texture_buffer_descriptor(&depth_texture);
+    let depth_buffer = device.create_buffer(&depth_buffer_desc);
+
+    // (6) Load the OBJ bunny
     let (models, _) = tobj::load_obj("bunny.obj", &tobj::GPU_LOAD_OPTIONS).unwrap();
     let bunny = &models[0].mesh;
 
-    // Create and initialize the vertex buffer for the vertices in the bunny mesh
+    // (6.1) Create and initialize the vertex buffer for the vertices in the bunny mesh
     // (needs the DeviceExt trait)
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Vertex Buffer"),
@@ -31,7 +73,7 @@ async fn run() {
         usage: wgpu::BufferUsages::VERTEX,
     });
 
-    // Create and initialize the index buffer for the indices of the vertices in the bunny mesh
+    // (6.2) Create and initialize the index buffer for the indices of the vertices in the bunny mesh
     // (needs the DeviceExt trait)
     let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Index Buffer"),
@@ -39,11 +81,13 @@ async fn run() {
         usage: wgpu::BufferUsages::INDEX,
     });
 
-    // Define our pipeline
+    // (7) Load the shader module, containing both the vertex and fragment shaders
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("obj_shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("obj.wgsl").into()),
     });
+
+    // (8) Define our pipeline
     let pipeline = build_simple_pipeline(
         &device,
         &shader_module,
@@ -54,7 +98,7 @@ async fn run() {
     // Initialize a command encoder
     let mut encoder = device.create_command_encoder(&Default::default());
 
-    // Draw our pipeline (add render pass to the command encoder)
+    // (9.1) Draw our pipeline (add render pass to the command encoder)
     // This needs to be inside {...} or a function so that the &pipeline lifetime works.
     draw_pipeline(
         &mut encoder,
@@ -66,17 +110,11 @@ async fn run() {
         bunny.indices.len() as u32,
     );
 
-    // Initialize a buffer for the texture output and copy the texture data into it
-    let output_buffer_desc = create_texture_buffer_descriptor(&texture);
-    let output_buffer = device.create_buffer(&output_buffer_desc);
+    // (9.2) Add commands to copy the textures into their respective buffers
     copy_texture_to_buffer(&mut encoder, &texture, &output_buffer);
-
-    // Also copy the depth texture into a buffer
-    let depth_buffer_desc = create_texture_buffer_descriptor(&depth_texture);
-    let depth_buffer = device.create_buffer(&depth_buffer_desc);
     copy_texture_to_buffer(&mut encoder, &depth_texture, &depth_buffer);
 
-    // Finalize the command encoder and send it to the queue
+    // (10) Finalize the command encoder and send it to the queue
     println!("Submitting commands to the queue ...");
     queue.submit(Some(encoder.finish()));
 
@@ -84,6 +122,7 @@ async fn run() {
     let width = texture.width();
     let height = texture.height();
 
+    // (11) Transfer both texture buffers into image buffers.
     // New scope to encapsulate img_data BufferView and drop it before unmapping.
     {
         // Transfer the texture output buffer into an image buffer
@@ -117,7 +156,7 @@ async fn run() {
     println!("Terminating the program ...")
 }
 
-/// Initializing WebGPU
+/// (1) Initializing WebGPU
 async fn init_wgpu_device() -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
     // Start an "Instance", which is the context for all things wgpu.
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -141,7 +180,7 @@ async fn init_wgpu_device() -> Result<(wgpu::Device, wgpu::Queue), wgpu::Request
     adapter.request_device(&Default::default(), None).await
 }
 
-/// Initialize the output texture
+/// (2) Initialize the output texture
 fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Texture {
     let texture_desc = wgpu::TextureDescriptor {
         label: Some("output_texture"),
@@ -165,7 +204,20 @@ fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Textur
     device.create_texture(&texture_desc)
 }
 
-/// Initialize a depth texture
+/// (3 & 5) Create a buffer descriptor of the correct size for the texture
+fn create_texture_buffer_descriptor(texture: &wgpu::Texture) -> wgpu::BufferDescriptor {
+    let texel_size = texture.format().block_copy_size(None).unwrap();
+    wgpu::BufferDescriptor {
+        size: (texel_size * texture.width() * texture.height()).into(),
+        usage: wgpu::BufferUsages::COPY_DST
+            // this tells wpgu that we want to read this buffer from the cpu
+            | wgpu::BufferUsages::MAP_READ,
+        label: None,
+        mapped_at_creation: false,
+    }
+}
+
+/// (4) Initialize a depth texture
 fn init_depth_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Texture {
     let texture_desc = wgpu::TextureDescriptor {
         label: Some("depth_texture"),
@@ -206,7 +258,7 @@ pub fn vtx_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
-/// Define our simple render pipeline
+/// (8) Define our simple render pipeline
 fn build_simple_pipeline(
     device: &wgpu::Device,
     shader_module: &wgpu::ShaderModule,
@@ -266,7 +318,7 @@ fn build_simple_pipeline(
     })
 }
 
-/// Draw our pipeline (add render pass to the command encoder).
+/// (9.1) Draw our pipeline (add render pass to the command encoder).
 fn draw_pipeline(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
@@ -313,20 +365,7 @@ fn draw_pipeline(
     render_pass.draw_indexed(0..num_indices, 0, 0..1);
 }
 
-/// Create a buffer descriptor of the correct size for the texture
-fn create_texture_buffer_descriptor(texture: &wgpu::Texture) -> wgpu::BufferDescriptor {
-    let texel_size = texture.format().block_copy_size(None).unwrap();
-    wgpu::BufferDescriptor {
-        size: (texel_size * texture.width() * texture.height()).into(),
-        usage: wgpu::BufferUsages::COPY_DST
-            // this tells wpgu that we want to read this buffer from the cpu
-            | wgpu::BufferUsages::MAP_READ,
-        label: None,
-        mapped_at_creation: false,
-    }
-}
-
-/// Copy the texture output into a buffer
+/// (9.2) Copy the texture output into a buffer
 fn copy_texture_to_buffer(
     encoder: &mut wgpu::CommandEncoder,
     texture: &wgpu::Texture,
@@ -355,7 +394,7 @@ fn copy_texture_to_buffer(
     );
 }
 
-/// Retrieve the texture buffer data from the GPU
+/// (11) Retrieve the texture buffer data from the GPU
 async fn retrieve_texture_buffer_data<'a>(
     device: &wgpu::Device,
     texture_buffer: &'a wgpu::Buffer,
