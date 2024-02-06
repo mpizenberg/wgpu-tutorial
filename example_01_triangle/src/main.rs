@@ -1,43 +1,68 @@
+//! This example aims at showing a minimal wgpu setup, to draw a triangle.
+//! 
+//! The corner coordinates of the triangle are hardcoded in the vertex shader for simplicity.
+//! Only the current corner index is passed to the vertex shader as input.
+//! The steps of this minimal program are the following.
+//!
+//! 1. (async) Initialize the connection with the GPU device
+//! 2. Initialize a wgpu Texture object that will serve as a write target for our pipeline
+//! 3. Initialize a wgpu Buffer where the Texture output will be transferred to
+//! 4. Load the shader module, containing both the vertex and fragment shaders
+//! 5. Define our render pipeline, including:
+//!    - the vertex shader
+//!    - the fragment shader
+//!    - the primitive type (triangle list)
+//! 6. Define our command encoder:
+//!    6.1. Start by defining our render pass:
+//!       - Link to the texture output
+//!       - Link to the pipeline
+//!       - Draw the primitive (provide vertices indices)
+//!    6.2. Add a command to copy the texture output to the output buffer
+//! 7. Submit our commands to the device queue
+//! 8. (async) Transfer the output buffer into an image we can save to disk
+
 fn main() {
     // Make the main async
     pollster::block_on(run());
 }
 
 async fn run() {
-    // Initializing WebGPU
+    // (1) Initializing WebGPU
     println!("Initializing WebGPU ...");
     let (device, queue) = init_wgpu_device().await.unwrap();
 
-    // Initialize the output texture
+    // (2) Initialize the output texture
     let texture = init_output_texture(&device, 256);
     let texture_view = texture.create_view(&Default::default());
 
-    // Define our pipeline
+    // (3) Initialize a buffer for the texture output
+    let output_buffer_desc = create_texture_buffer_descriptor(&texture);
+    let output_buffer = device.create_buffer(&output_buffer_desc);
+
+    // (4) Load the shader module
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("triangle_shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("triangle.wgsl").into()),
     });
+
+    // (5) Define our pipeline
     let pipeline = build_simple_pipeline(&device, &shader_module, texture.format());
 
     // Initialize a command encoder
     let mut encoder = device.create_command_encoder(&Default::default());
 
-    // Draw our pipeline (add render pass to the command encoder)
+    // (6.1)Draw our pipeline (add render pass to the command encoder)
     // This needs to be inside {...} or a function so that the &pipeline lifetime works.
     draw_pipeline(&mut encoder, &pipeline, &texture_view);
 
-    // Initialize a buffer for the texture output
-    let output_buffer_desc = create_texture_buffer_descriptor(&texture);
-    let output_buffer = device.create_buffer(&output_buffer_desc);
-
-    // Copy the texture output into a buffer
+    // (6.2) Copy the texture output into a buffer
     copy_texture_to_buffer(&mut encoder, &texture, &output_buffer);
 
-    // Finalize the command encoder and send it to the queue
+    // (7) Finalize the command encoder and send it to the queue
     println!("Submitting commands to the queue ...");
     queue.submit(Some(encoder.finish()));
 
-    // Transfer the texture output buffer into an image buffer
+    // (8) Transfer the texture output buffer into an image buffer
     println!("Saving the GPU output into an image ...");
     let img = to_image(&device, &output_buffer, texture.width(), texture.height()).await;
 
@@ -50,7 +75,7 @@ async fn run() {
     println!("Terminating the program ...")
 }
 
-/// Initializing WebGPU
+/// (1) Initializing WebGPU
 async fn init_wgpu_device() -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
     // Start an "Instance", which is the context for all things wgpu.
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -74,7 +99,7 @@ async fn init_wgpu_device() -> Result<(wgpu::Device, wgpu::Queue), wgpu::Request
     adapter.request_device(&Default::default(), None).await
 }
 
-/// Initialize the output texture
+/// (2) Initialize the output texture
 fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Texture {
     let texture_desc = wgpu::TextureDescriptor {
         label: Some("output_texture"),
@@ -98,7 +123,20 @@ fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Textur
     device.create_texture(&texture_desc)
 }
 
-/// Define our simple render pipeline
+/// (3) Create a buffer descriptor of the correct size for the texture
+fn create_texture_buffer_descriptor(texture: &wgpu::Texture) -> wgpu::BufferDescriptor {
+    let texel_size = texture.format().block_copy_size(None).unwrap();
+    wgpu::BufferDescriptor {
+        size: (texel_size * texture.width() * texture.height()).into(),
+        usage: wgpu::BufferUsages::COPY_DST
+            // this tells wpgu that we want to read this buffer from the cpu
+            | wgpu::BufferUsages::MAP_READ,
+        label: None,
+        mapped_at_creation: false,
+    }
+}
+
+/// (5) Define our simple render pipeline
 fn build_simple_pipeline(
     device: &wgpu::Device,
     shader_module: &wgpu::ShaderModule,
@@ -148,7 +186,7 @@ fn build_simple_pipeline(
     })
 }
 
-/// Draw our pipeline (add render pass to the command encoder).
+/// (6.1) Draw our pipeline (add render pass to the command encoder).
 fn draw_pipeline(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
@@ -181,20 +219,7 @@ fn draw_pipeline(
     render_pass.draw(0..3, 0..1);
 }
 
-/// Create a buffer descriptor of the correct size for the texture
-fn create_texture_buffer_descriptor(texture: &wgpu::Texture) -> wgpu::BufferDescriptor {
-    let texel_size = texture.format().block_copy_size(None).unwrap();
-    wgpu::BufferDescriptor {
-        size: (texel_size * texture.width() * texture.height()).into(),
-        usage: wgpu::BufferUsages::COPY_DST
-            // this tells wpgu that we want to read this buffer from the cpu
-            | wgpu::BufferUsages::MAP_READ,
-        label: None,
-        mapped_at_creation: false,
-    }
-}
-
-/// Copy the texture output into a buffer
+/// (6.2) Copy the texture output into a buffer
 fn copy_texture_to_buffer(
     encoder: &mut wgpu::CommandEncoder,
     texture: &wgpu::Texture,
@@ -223,7 +248,7 @@ fn copy_texture_to_buffer(
     );
 }
 
-/// Copy the texture output buffer into an image buffer
+/// (8) Copy the texture output buffer into an image buffer
 async fn to_image(
     device: &wgpu::Device,
     texture_buffer: &wgpu::Buffer,
