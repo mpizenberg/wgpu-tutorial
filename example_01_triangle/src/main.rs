@@ -13,11 +13,11 @@
 //!    - the fragment shader
 //!    - the primitive type (triangle list)
 //! 6. Define our command encoder:
-//!    6.1. Start by defining our render pass:
+//!    1. Start by defining our render pass:
 //!       - Link to the texture output
 //!       - Link to the pipeline
 //!       - Draw the primitive (provide vertices indices)
-//!    6.2. Add a command to copy the texture output to the output buffer
+//!    2. Add a command to copy the texture output to the output buffer
 //! 7. Submit our commands to the device queue
 //! 8. (async) Transfer the output buffer into an image we can save to disk
 
