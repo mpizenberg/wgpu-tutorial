@@ -1,4 +1,4 @@
-//! This example aims at showing a minimal wgpu setup, to draw a triangle.
+//! This example aims at showing a minimal wgpu setup to draw a triangle.
 //! 
 //! The corner coordinates of the triangle are hardcoded in the vertex shader for simplicity.
 //! Only the current corner index is passed to the vertex shader as input.
