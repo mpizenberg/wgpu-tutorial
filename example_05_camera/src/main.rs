@@ -1,34 +1,37 @@
-//! This example aims at showing how to use and retrieve the depth (Z) in a minimal wgpu setup.
-//! 
+//! This example shows how to do camera projections with uniform buffers in a minimal wgpu setup.
+//!
 //! We reuse the bunny OBJ from the previous example,
-//! except this time we try to output a depth map instead of just a mask of the bunny.
-//! This example also shows the effect of the clipping space (0.0-1.0 for Z).
-//! Indeed, a small part of the bunny ear is cut, due to negative Z coordinates.
+//! except this time we provide camera parameters to the vertex shader with uniform buffers
+//! to perform a perspective projection instead of a simple orthogonal projection.
+//! In addition, we also introduce the notion of near/far planes to control Z clipping.
 //! The steps of this minimal program are the following.
 //!
 //! 1. (async) Initialize the connection with the GPU device
 //! 2. Initialize a wgpu Texture object that will serve as a write target for fragment shader
 //! 3. Initialize a wgpu Buffer where the Texture output will be transferred to
-//! 4. **(new)** Initialize a wgpu Texture object that will serve as a write target for the depth
-//! 5. **(new)** Initialize a wgpu Buffer where the depth texture will be transferred to
-//! 6. Load the OBJ bunny
+//! 4. Initialize a wgpu Texture object that will serve as a write target for the depth
+//! 5. Load the OBJ bunny
 //!    1. Create and initialize a vertex buffer containing the triangle coordinates
 //!    2. Create and initialize an index buffer containing the vertex indices in the face
-//! 7. Load the shader module, containing both the vertex and fragment shaders
-//! 8. Define our render pipeline, including:
+//! 6. Load the shader module, containing both the vertex and fragment shaders
+//! 7. Define our render pipeline, including:
 //!    - the vertex shader: include our vertex buffer layout
 //!    - the fragment shader
 //!    - the primitive type (triangle list)
-//!    - **(new)** the depth_stencil is configured to compare depths on fragments
+//!    - the depth_stencil is configured to compare depths on fragments
 //!      and only keep it when it's closer ("Less").
 //!      Also specifies to store that final depth into our depth texture
+//! 8. **(new)** Create the camera
+//!    1. Create a perspective projection camera and put it into a uniform buffer
+//!    2. Create a bind group and let WebGPU derive the layout implicitely
 //! 9. Define our command encoder:
 //!    1. Start by defining our render pass:
 //!       - Link to the texture output
 //!       - Link to the pipeline
+//!       - **(new)** Provide the camera bind group
 //!       - Provide vertex buffer and index buffer
 //!       - Draw the primitive
-//!    2. Add a command to copy the fragment and **(new)** depth textures into their respective buffers
+//!    2. Add a command to copy the fragment texture into the output buffer
 //! 10. Submit our commands to the device queue
 //! 11. (async) Transfer the output buffer into an image we can save to disk
 
@@ -45,8 +48,9 @@ async fn run() {
     let (device, queue) = init_wgpu_device().await.unwrap();
 
     // (2) Initialize the output texture
-    let texture_size = 256;
-    let texture = init_output_texture(&device, texture_size);
+    let width = 256;
+    let height = 256;
+    let texture = init_output_texture(&device, width, height);
     let texture_view = texture.create_view(&Default::default());
 
     // (3) Initialize a buffer for the texture output
@@ -54,18 +58,14 @@ async fn run() {
     let output_buffer = device.create_buffer(&output_buffer_desc);
 
     // (4) Initialize the depth texture
-    let depth_texture = init_depth_texture(&device, texture_size);
+    let depth_texture = init_depth_texture(&device, width, height);
     let depth_texture_view = depth_texture.create_view(&Default::default());
 
-    // (5) Initialize a buffer for the depth texture output
-    let depth_buffer_desc = create_texture_buffer_descriptor(&depth_texture);
-    let depth_buffer = device.create_buffer(&depth_buffer_desc);
-
-    // (6) Load the OBJ bunny
+    // (5) Load the OBJ bunny
     let (models, _) = tobj::load_obj("bunny.obj", &tobj::GPU_LOAD_OPTIONS).unwrap();
     let bunny = &models[0].mesh;
 
-    // (6.1) Create and initialize the vertex buffer for the vertices in the bunny mesh
+    // (5.1) Create and initialize the vertex buffer for the vertices in the bunny mesh
     // (needs the DeviceExt trait)
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Vertex Buffer"),
@@ -73,7 +73,7 @@ async fn run() {
         usage: wgpu::BufferUsages::VERTEX,
     });
 
-    // (6.2) Create and initialize the index buffer for the indices of the vertices in the bunny mesh
+    // (5.2) Create and initialize the index buffer for the indices of the vertices in the bunny mesh
     // (needs the DeviceExt trait)
     let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Index Buffer"),
@@ -81,19 +81,32 @@ async fn run() {
         usage: wgpu::BufferUsages::INDEX,
     });
 
-    // (7) Load the shader module, containing both the vertex and fragment shaders
+    // (6) Load the shader module, containing both the vertex and fragment shaders
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("camera_shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("camera.wgsl").into()),
     });
 
-    // (8) Define our pipeline
+    // (7) Define our pipeline
     let pipeline = build_simple_pipeline(
         &device,
         &shader_module,
         texture.format(),
         vtx_buffer_layout(),
     );
+
+    // (8.1) Create a perspective projection camera and put it into a uniform buffer
+    let camera = Camera {
+        focal_length: 5.0,
+        aspect_ratio: (height as f32) / (width as f32),
+        near_plane: 0.45,
+        far_plane: 0.49,
+    };
+    let camera_buffer = camera.create_uniform_buffer(&device);
+    // (8.2) For the bind group layout, we let WebGPU derive it implicitely.
+    // We just tell it that it's the first one at index 0.
+    let camera_bind_group =
+        Camera::create_bind_group(&device, &camera_buffer, &pipeline.get_bind_group_layout(0));
 
     // Initialize a command encoder
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -105,6 +118,7 @@ async fn run() {
         &pipeline,
         &texture_view,
         &depth_texture_view,
+        &camera_bind_group,
         &vertex_buffer,
         &index_buffer,
         bunny.indices.len() as u32,
@@ -112,17 +126,12 @@ async fn run() {
 
     // (9.2) Add commands to copy the textures into their respective buffers
     copy_texture_to_buffer(&mut encoder, &texture, &output_buffer);
-    copy_texture_to_buffer(&mut encoder, &depth_texture, &depth_buffer);
 
     // (10) Finalize the command encoder and send it to the queue
     println!("Submitting commands to the queue ...");
     queue.submit(Some(encoder.finish()));
 
-    // Image width and height for convenience
-    let width = texture.width();
-    let height = texture.height();
-
-    // (11) Transfer both texture buffers into image buffers.
+    // (11) Transfer texture buffers into image buffers.
     // New scope to encapsulate img_data BufferView and drop it before unmapping.
     {
         // Transfer the texture output buffer into an image buffer
@@ -132,26 +141,10 @@ async fn run() {
 
         println!("Saving the image to disk ...");
         img.save("image.png").unwrap();
-
-        // Do the same for the depth buffer
-        println!("Saving the GPU depth output into an image ...");
-        let depth_data = retrieve_texture_buffer_data(&device, &depth_buffer).await;
-        let depth_data_f32: &[f32] = bytemuck::cast_slice(&depth_data);
-
-        println!("Saving the f32 data as a u16 image to disk ...");
-        let img_data_u16: Vec<u16> = depth_data_f32
-            .iter()
-            .map(|p| (p.max(0.0).min(1.0) * 65535.0) as u16)
-            .collect();
-        let img_u16 =
-            image::ImageBuffer::<image::Luma<u16>, _>::from_raw(width, height, img_data_u16)
-                .unwrap();
-        img_u16.save("depth.png").unwrap();
     }
 
     // Flushes any pending write operations and unmaps the buffer from host memory
     output_buffer.unmap();
-    depth_buffer.unmap();
 
     println!("Terminating the program ...")
 }
@@ -181,13 +174,13 @@ async fn init_wgpu_device() -> Result<(wgpu::Device, wgpu::Queue), wgpu::Request
 }
 
 /// (2) Initialize the output texture
-fn init_output_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Texture {
+fn init_output_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
     let texture_desc = wgpu::TextureDescriptor {
         label: Some("output_texture"),
         // The texture size. (layers is set to 1)
         size: wgpu::Extent3d {
-            width: texture_size,
-            height: texture_size,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         dimension: wgpu::TextureDimension::D2,
@@ -218,13 +211,13 @@ fn create_texture_buffer_descriptor(texture: &wgpu::Texture) -> wgpu::BufferDesc
 }
 
 /// (4) Initialize a depth texture
-fn init_depth_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Texture {
+fn init_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
     let texture_desc = wgpu::TextureDescriptor {
         label: Some("depth_texture"),
         // The texture size. (layers is set to 1)
         size: wgpu::Extent3d {
-            width: texture_size,
-            height: texture_size,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         dimension: wgpu::TextureDimension::D2,
@@ -242,7 +235,7 @@ fn init_depth_texture(device: &wgpu::Device, texture_size: u32) -> wgpu::Texture
 }
 
 /// Define the layout of Vertex buffers
-pub fn vtx_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
+fn vtx_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
         // array_stride is the bytes count between two vertices
         array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
@@ -258,7 +251,46 @@ pub fn vtx_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
-/// (8) Define our simple render pipeline
+/// Perspective camera
+/// Bytemuck is used to enable easy casting to a &[u8].
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Camera {
+    focal_length: f32,
+    aspect_ratio: f32,
+    near_plane: f32,
+    far_plane: f32,
+}
+
+impl Camera {
+    fn create_uniform_buffer(&self, device: &wgpu::Device) -> wgpu::Buffer {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Camera Buffer"),
+            contents: bytemuck::bytes_of(self),
+            usage: wgpu::BufferUsages::UNIFORM, // | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+    fn create_bind_group(
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        layout: &wgpu::BindGroupLayout,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset: 0,
+                    size: None, // automatic size from offset to buffer end
+                }),
+            }],
+            label: Some("camera_bind_group"),
+        })
+    }
+}
+
+/// (7) Define our simple render pipeline
 fn build_simple_pipeline(
     device: &wgpu::Device,
     shader_module: &wgpu::ShaderModule,
@@ -324,6 +356,7 @@ fn draw_pipeline(
     pipeline: &wgpu::RenderPipeline,
     texture_view: &wgpu::TextureView,
     depth_texture_view: &wgpu::TextureView,
+    camera_bind_group: &wgpu::BindGroup,
     vertex_buffer: &wgpu::Buffer,
     index_buffer: &wgpu::Buffer,
     num_indices: u32,
@@ -360,6 +393,7 @@ fn draw_pipeline(
 
     // Draw the render pass for our pipeline
     render_pass.set_pipeline(&pipeline);
+    render_pass.set_bind_group(0, &camera_bind_group, &[]);
     render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
     render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
     render_pass.draw_indexed(0..num_indices, 0, 0..1);
