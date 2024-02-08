@@ -98,7 +98,7 @@ async fn run() {
     // (8.1) Create a perspective projection camera and put it into a uniform buffer
     let camera = Camera {
         focal_length: 5.0,
-        aspect_ratio: (height as f32) / (width as f32),
+        aspect_ratio: (width as f32) / (height as f32),
         near_plane: 0.45,
         far_plane: 0.49,
     };
