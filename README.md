@@ -69,3 +69,8 @@ We reuse the bunny OBJ from the previous example,
 except this time we provide camera parameters to the vertex shader with uniform buffers
 to perform a perspective projection instead of a simple orthogonal projection.
 In addition, we also introduce the notion of near/far planes to control Z clipping.
+
+## 6. Storage texture and Compute shader
+
+This example shows how to use a compute shader to evolve a game of life automaton. Contrary to vertex and fragment shaders, compute shaders have no predefined outputs; here we use a "storage texture" to write the next state of the automaton. A grid of workgroups (which is itself a grid of threads) is dispatched so that one thread is assigned to one cell (i.e. one pixel of the input texture).
+A more advanced variant of the compute shader illustrates how to use local workgroup memory, which is faster than video or system memory.
