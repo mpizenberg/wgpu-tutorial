@@ -18,9 +18,7 @@
 // (comparatively slow) VRAM
 @compute
 @workgroup_size(16, 16)
-fn step(@builtin(global_invocation_id) cell_id: vec3u,
-        @builtin(local_invocation_id) local_id: vec3u,
-) {
+fn step(@builtin(global_invocation_id) cell_id: vec3u) {
 
     var num_alive = 0;
     var alive: bool = false;
@@ -38,7 +36,6 @@ fn step(@builtin(global_invocation_id) cell_id: vec3u,
             }
         }
     }
-    let num_dead = 8 - num_alive;
 
     if alive {
         if (num_alive < 2) || (num_alive > 3) {
@@ -120,7 +117,6 @@ fn step_local_mem(@builtin(global_invocation_id) cell_id: vec3u,
             }
         }
     }
-    let num_dead = 8 - num_alive;
 
     if alive {
         if (num_alive < 2) || (num_alive > 3) {
