@@ -145,8 +145,10 @@ async fn run() {
 
     // Animated gif encoder
     let mut image = File::create("image.gif").unwrap();
-    let color_map = &[0x11, 0x77, 0xaa, /* cell color */
-                      0x33, 0x22, 0,    /* background color*/ ];
+    let color_map = &[
+        0x11, 0x77, 0xaa, /* cell color */
+        0x33, 0x22, 0, /* background color*/
+    ];
     let mut gif_enc =
         gif::Encoder::new(&mut image, width as u16, height as u16, color_map).unwrap();
 
