@@ -1,0 +1,13 @@
+[package]
+name = "example_06_gol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wgpu = "0.19.1"    # Rust library for WebGPU
+pollster = "0.3.0" # Simplest dep for async main
+# Cast Rust structs to u8 buffers
+bytemuck = { version = "1.14.1", features = ["derive"] }
+gif = "0.13.1" # Save generated sequence as gif
+indicatif = "0.17.8" # Show a console progress bar
+rand = "0.8.5"

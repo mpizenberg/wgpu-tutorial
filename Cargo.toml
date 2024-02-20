@@ -6,4 +6,5 @@ members = [
     "example_03_obj",
     "example_04_depth",
     "example_05_camera",
+    "example_06_gol",
 ]
